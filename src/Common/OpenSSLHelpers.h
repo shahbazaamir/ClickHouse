@@ -18,6 +18,9 @@ void encodeSHA256(const void * text, size_t size, unsigned char * out);
 
 std::string calculateHMACwithSHA256(std::string, const Poco::Crypto::RSAKey &);
 
+/// Generate Certificate Signing Request with given `subject(s)` and private key.
+std::string generateCSR(std::vector<std::string>, std::string);
+
 /// Returns concatenation of error strings for all errors that OpenSSL has recorded, emptying the error queue.
 String getOpenSSLErrors();
 
