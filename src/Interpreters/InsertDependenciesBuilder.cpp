@@ -1050,6 +1050,8 @@ Chain InsertDependenciesBuilder::createSink(StorageIDPrivate view_id) const
     const auto & inner_storage = storages.at(inner_table_id);
     const auto & insert_context = insert_contexts.at(view_id);
 
+    IInterpreter::checkStorageSupportsTransactionsIfNeeded(inner_storage, insert_context);
+
     if (auto * live_view = dynamic_cast<StorageLiveView *>(inner_storage.get()))
     {
         auto sink = std::make_shared<PushingToLiveViewSink>(input_headers.at(view_id), *live_view, insert_context);
