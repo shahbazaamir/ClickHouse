@@ -46,11 +46,8 @@ static void setupLogging(const std::string & log_level)
     Poco::Logger::root().setLevel(log_level);
 }
 
-static std::string getXMLSubTreeAsString(DB::XMLDocumentPtr config_xml, const std::string& key) {
-    Poco::XML::Node * node = DB::XMLUtils::getRootNode(config_xml.get())->getNodeByPath(key);
-    if (!node)
-        return "";
-    
+static std::string getXMLSubTreeAsString(DB::XMLDocumentPtr config_xml, const std::string& key)
+{
     Poco::XML::DOMWriter writer;
     writer.setNewLine("\n");
     writer.setIndent("    ");
@@ -58,11 +55,24 @@ static std::string getXMLSubTreeAsString(DB::XMLDocumentPtr config_xml, const st
     
     std::ostringstream oss;
 
-    // Write all the node's children
-    Poco::XML::Node * child = node->firstChild();
-    while (child) {
-        writer.writeNode(oss, child);
-        child = child->nextSibling();
+    Poco::XML::Node * node = DB::XMLUtils::getRootNode(config_xml.get())->getNodeByPath(key);
+    if (!node)
+        return "";
+
+    if (key.empty())
+    {
+        // Write the entire tree
+        writer.writeNode(oss, node);
+    }
+    else
+    {
+        // Write the node's children
+        Poco::XML::Node * child = node->firstChild();
+        while (child)
+        {
+            writer.writeNode(oss, child);
+            child = child->nextSibling();
+        }
     }
 
     return oss.str();
@@ -137,26 +147,27 @@ static DB::XMLDocumentPtr getXMLconfiguration(const std::string & config_path, b
     return config_xml;
 }
 
+static DB::XMLDocumentPtr getUsersXMLConfiguration(DB::XMLDocumentPtr configuration_xml, const std::string & config_path, bool try_get)
+{
+    DB::ConfigurationPtr configuration = DB::ConfigurationPtr(new Poco::Util::XMLConfiguration(configuration_xml));
+    bool has_user_directories = configuration->has("user_directories");
+    if (!has_user_directories && !try_get)
+        throw DB::Exception(DB::ErrorCodes::CANNOT_LOAD_CONFIG, "Can't load config for users");
+
+    std::string users_config_path = configuration->getString("user_directories.users_xml.path");
+    const auto config_dir = fs::path{config_path}.remove_filename().string();
+    if (fs::path(users_config_path).is_relative() && fs::exists(fs::path(config_dir) / users_config_path))
+        users_config_path = fs::path(config_dir) / users_config_path;
+    return getXMLconfiguration(users_config_path, false);
+}
 
 static std::vector<std::string> extractFromConfig(
         const std::string & config_path, const std::string & key, bool process_zk_includes, bool try_get = false, bool get_users = false)
 {
     DB::XMLDocumentPtr configuration_xml = getXMLconfiguration(config_path, process_zk_includes);
-    DB::ConfigurationPtr configuration = DB::ConfigurationPtr(new Poco::Util::XMLConfiguration(configuration_xml));
-
     if (get_users)
-    {
-        bool has_user_directories = configuration->has("user_directories");
-        if (!has_user_directories && !try_get)
-            throw DB::Exception(DB::ErrorCodes::CANNOT_LOAD_CONFIG, "Can't load config for users");
-
-        std::string users_config_path = configuration->getString("user_directories.users_xml.path");
-        const auto config_dir = fs::path{config_path}.remove_filename().string();
-        if (fs::path(users_config_path).is_relative() && fs::exists(fs::path(config_dir) / users_config_path))
-            users_config_path = fs::path(config_dir) / users_config_path;
-        configuration_xml = getXMLconfiguration(users_config_path, process_zk_includes);
-        configuration = DB::ConfigurationPtr(new Poco::Util::XMLConfiguration(configuration_xml));
-    }
+        configuration_xml = getUsersXMLConfiguration(configuration_xml, config_path, try_get);
+    DB::ConfigurationPtr configuration = DB::ConfigurationPtr(new Poco::Util::XMLConfiguration(configuration_xml));
 
     // Check if this key has a non-scalar value by looking for subkeys
     Poco::Util::XMLConfiguration::Keys keys;
@@ -201,7 +212,7 @@ int mainEntryClickHouseExtractFromConfig(int argc, char ** argv)
         ("users", po::bool_switch(&get_users), "Return values from users.xml config")
         ("log-level", po::value<std::string>(&log_level)->default_value("error"), "log level")
         ("config-file,c", po::value<std::string>(&config_path)->required(), "path to config file")
-        ("key,k", po::value<std::string>(&key)->required(), "key to get value for");
+        ("key,k", po::value<std::string>(&key)->default_value(""), "key to get value for");
 
     po::positional_options_description positional_desc;
     positional_desc.add("config-file", 1);
@@ -225,8 +236,21 @@ int mainEntryClickHouseExtractFromConfig(int argc, char ** argv)
         po::notify(options);
 
         setupLogging(log_level);
-        for (const auto & value : extractFromConfig(config_path, key, process_zk_includes, try_get, get_users))
-            std::cout << value << std::endl;
+
+        if (key.empty())
+        {
+            // If no key provided, print the entire configuration tree
+            DB::XMLDocumentPtr configuration_xml = getXMLconfiguration(config_path, process_zk_includes);
+            if (get_users)
+                configuration_xml = getUsersXMLConfiguration(configuration_xml, config_path, try_get);
+            std::cout << getXMLSubTreeAsString(configuration_xml, "") << std::endl;
+        }
+        else
+        {
+            for (const auto & value : extractFromConfig(config_path, key, process_zk_includes, try_get, get_users))
+                std::cout << value << std::endl;
+        }
+
     }
     catch (...)
     {
