@@ -271,11 +271,11 @@ public:
 
         if (statuses.empty())
         {
-            if (result_exception && !views_manager->materialized_views_ignore_errors)
+            if (first_internal_exception && !views_manager->materialized_views_ignore_errors)
             {
                 // if there was external exception, than it is already pushed
                 // we push only some our exception here if we have such
-                output.pushException(result_exception);
+                output.pushException(first_internal_exception);
             }
 
             output.finish();
@@ -307,27 +307,27 @@ public:
             if (!data.exception)
                 continue;
 
-            if (status.exception)
-                continue;
-
             auto [is_external, original_exception] = unwrapExternalException(data.exception);
-
-            if (!first_exception)
-                first_exception = original_exception;
 
             if (is_external)
             {
+                if (!first_external_exception)
+                    first_external_exception = original_exception;
+
                 output.pushException(original_exception);
                 return Status::PortFull;
             }
 
-            if (!status.exception)
-                status.exception = addStorageToException(data.exception, status.view_id);
+            if (!first_internal_exception)
+                first_internal_exception = addStorageToException(original_exception, status.view_id);
+
+            if (status.exception)
+                continue;
+
+            status.exception = addStorageToException(original_exception, status.view_id);
 
             if (!views_manager->materialized_views_ignore_errors)
-            {
                 return Status::Ready;
-            }
 
             tryLogException(
                 status.exception,
@@ -349,11 +349,31 @@ public:
     {
         for (auto & status : statuses)
         {
+            auto view_exception = status.exception;
+            auto view_or_upper_exception = view_exception ? view_exception : first_external_exception;
+            auto any_exception = view_or_upper_exception ? view_or_upper_exception : first_internal_exception;
 
-            views_manager->logQueryView(status.view_id, status.exception ? status.exception : first_exception);
+            LOG_TRACE(
+                getLogger("FinalizingViewsTransform"),
+                "view {} finished {} has view_exception {}, has view_or_upper_exception {}, has any_exception {}",
+                status.view_id, status.is_finished, bool(view_exception), bool(view_or_upper_exception), bool(any_exception));
 
-            if (!result_exception)
-                result_exception = status.exception;
+
+            if (views_manager->materialized_views_ignore_errors)
+            {
+                if (status.is_finished)
+                {
+                    views_manager->logQueryView(status.view_id, view_or_upper_exception);
+                }
+                else
+                {
+                    views_manager->logQueryView(status.view_id, any_exception);
+                }
+            }
+            else
+            {
+                views_manager->logQueryView(status.view_id,any_exception);
+            }
         }
 
         statuses.clear();
@@ -390,8 +410,8 @@ private:
 
     InsertDependenciesBuilder::ConstPtr views_manager;
     std::vector<ViewStatus> statuses;
-    std::exception_ptr first_exception;
-    std::exception_ptr result_exception;
+    std::exception_ptr first_internal_exception;
+    std::exception_ptr first_external_exception;
 };
 
 
@@ -629,7 +649,7 @@ bool InsertDependenciesBuilder::collectPath(const DependencyPath & path)
 {
     const auto & parent = path.parent();
     const auto & current = path.current();
-    LOG_TEST(logger, "collectPath: {}", path.debugString());
+    LOG_TRACE(logger, "collectPath: {}", path.debugString());
 
     auto storage = current == init_table_id ? init_storage : DatabaseCatalog::instance().tryGetTable(current, init_context);
     auto lock = storage ? storage->tryLockForShare(init_context->getInitialQueryId(), init_context->getSettingsRef()[Setting::lock_acquire_timeout]) : nullptr;
@@ -1158,13 +1178,14 @@ void InsertDependenciesBuilder::logQueryView(StorageID view_id, std::exception_p
     if (event_status < settings[Setting::log_queries_min_type])
         return;
 
-    if (!thread_groups.contains(view_id) || view_types.contains(view_id) || inner_tables.contains(view_id))
+    if (!thread_groups.contains(view_id) || !view_types.contains(view_id) || !inner_tables.contains(view_id))
         return;
 
     const auto & thread_group = thread_groups.at(view_id);
     if (!thread_group)
         return;
 
+    LOG_TRACE(logger, "view {} status {} exception <{}>", view_id, event_status, exception ? getExceptionMessage(exception, false) : "-");
     const auto & view_type = view_types.at(view_id);
     const auto & inner_table_id = inner_tables.at(view_id);
 
