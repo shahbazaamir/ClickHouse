@@ -17,7 +17,6 @@
 
 #include <memory>
 #include <string>
-#include <unordered_map>
 
 #include <Common/ErrorCodes.h>
 
@@ -89,6 +88,15 @@ public:
         BaseStorageConfiguration::setPaths(current_metadata->makePartitionPruning(filter_dag));
     }
 
+
+    std::optional<size_t> totalRows() override
+    {
+        if (!current_metadata)
+            return {};
+
+        return current_metadata->totalRows();
+    }
+
     std::shared_ptr<NamesAndTypesList> getInitialSchemaByPath(const String & data_path) const override
     {
         if (!current_metadata)
@@ -130,10 +138,10 @@ public:
         return current_metadata->supportsFileIterator();
     }
 
-    ObjectIterator iterate() override
+    ObjectIterator iterate(IDataLakeMetadata::FileProgressCallback callback, size_t list_batch_size) override
     {
         chassert(current_metadata);
-        return current_metadata->iterate();
+        return current_metadata->iterate(callback, list_batch_size);
     }
 
     /// This is an awful temporary crutch,
