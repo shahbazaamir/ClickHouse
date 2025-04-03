@@ -83,12 +83,13 @@ ThreadGroup::ThreadGroup(ContextPtr query_context_, FatalErrorCallback fatal_err
     };
 }
 
+// c-tor for method createForMaterializedView
 ThreadGroup::ThreadGroup(ThreadGroupPtr parent)
     : master_thread_id(parent->master_thread_id)
     , query_context(parent->query_context)
     , global_context(parent->global_context)
     , fatal_error_callback(parent->fatal_error_callback)
-    , memory_spill_scheduler(false)
+    , memory_spill_scheduler(false) // memory_spill_scheduler is not used inside processors which is designated for MV, no need to enable it here
     , performance_counters(VariableContext::Process, &parent->performance_counters)
     , memory_tracker(&parent->memory_tracker, VariableContext::Process, /*log_peak_memory_usage_in_destructor*/ false)
     , shared_data(parent->getSharedData())

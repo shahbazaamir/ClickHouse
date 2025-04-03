@@ -605,8 +605,8 @@ Chain InsertDependenciesBuilder::createChainWithDependencies() const
     }
 
     // *Log storages have method `noPushingToViewsOnInserts` returned `true`.
-    // When data is inserted to the *Log storages, then it is not supposed to be inserted to the dependant views
-    // When *Log storages push data to the dependant views, then `skip_destination_table` is true, data is pushed to the views only, not to the destination table
+    // When data is inserted to the *Log storages, then it is not supposed to be inserted to the dependent views
+    // When *Log storages push data to the dependent views, then `skip_destination_table` is true, data is pushed to the views only, not to the destination table
     if (!init_storage->noPushingToViewsOnInserts() || skip_destination_table)
         result.appendChainNotStrict(createPostSink(root_view));
 
