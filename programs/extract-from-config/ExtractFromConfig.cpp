@@ -173,7 +173,8 @@ static std::vector<std::string> extractFromConfig(
     // Check if this key has a non-scalar value by looking for subkeys
     Poco::Util::XMLConfiguration::Keys keys;
     configuration->keys(key, keys);
-    if (!keys.empty()) {
+    if (!keys.empty())
+    {
         // Non-scalar object, Output XML node
         return {getXMLSubTreeAsString(configuration_xml, key)};
     }
