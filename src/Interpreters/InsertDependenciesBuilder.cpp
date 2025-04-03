@@ -661,9 +661,6 @@ bool InsertDependenciesBuilder::collectPath(const DependencyPath & path)
     auto lock = storage ? storage->tryLockForShare(init_context->getInitialQueryId(), init_context->getSettingsRef()[Setting::lock_acquire_timeout]) : nullptr;
     if (!lock)
     {
-        if (storage)
-            chassert(storage->is_dropped || storage->is_detached);
-
         if (current == init_table_id)
             throw Exception(
                 ErrorCodes::UNKNOWN_TABLE,

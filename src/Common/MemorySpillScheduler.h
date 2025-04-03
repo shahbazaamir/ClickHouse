@@ -26,7 +26,6 @@ public:
 
     void checkAndSpill(IProcessor * processor);
     void remove(IProcessor * processor);
-    bool isEnabled() const { return enable; }
 
 private:
     bool enable = true;
