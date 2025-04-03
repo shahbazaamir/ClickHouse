@@ -74,8 +74,8 @@ private:
     bool no_destination = false;
     const bool async_insert;
 
-    UInt64 max_threads = 0;
-    UInt64 max_insert_threads = 0;
+    size_t max_threads = 0;
+    size_t max_insert_threads = 0;
 
     std::vector<std::unique_ptr<ReadBuffer>> owned_buffers;
 

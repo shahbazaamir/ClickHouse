@@ -109,8 +109,8 @@ InterpreterInsertQuery::InterpreterInsertQuery(
         quota->checkExceeded(QuotaType::WRITTEN_BYTES);
 
     const Settings & settings = getContext()->getSettingsRef();
-    max_threads = std::max<UInt64>(1, settings[Setting::max_threads]);
-    max_insert_threads = std::min(std::max<UInt64>(1, settings[Setting::max_insert_threads]), max_threads);
+    max_threads = std::max<size_t>(1, settings[Setting::max_threads]);
+    max_insert_threads = std::min(std::max<size_t>(1, settings[Setting::max_insert_threads]), max_threads);
 }
 
 
@@ -539,7 +539,7 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
     pipeline.addChains(std::move(sink_chains));
 
 
-    pipeline.setMaxThreads(is_trivial_insert_select ? max_insert_threads : std::max(num_select_threads, max_insert_threads));
+    pipeline.setMaxThreads(is_trivial_insert_select ? max_insert_threads : std::max<size_t>(num_select_threads, max_insert_threads));
 
     pipeline.setSinks([&](const Block & cur_header, QueryPipelineBuilder::StreamType) -> ProcessorPtr
     {
