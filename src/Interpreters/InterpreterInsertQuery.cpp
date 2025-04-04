@@ -493,27 +493,21 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
         });
     }
 
-    /// Number of streams works like this:
-    ///  * For the SELECT, use `max_threads`, or `max_insert_threads`, or whatever
-    ///    InterpreterSelectQuery ends up with.
-    ///  * Use `max_insert_threads` streams for various insert-preparation steps, e.g.
-    ///    materializing and squashing (too slow to do in one thread). That's `presink_chains`.
-    ///  * If the table supports parallel inserts, use max_insert_threads for writing to IStorage.
-    ///    Otherwise ResizeProcessor them down to 1 stream.
-
-    size_t sink_streams_size = table->supportsParallelInsert() ? max_insert_threads : 1;
-
-    size_t views_involved =  table->isView() || !DatabaseCatalog::instance().getDependentViews(table->getStorageID()).empty();
-    if (!settings[Setting::parallel_view_processing] && views_involved)
-    {
-        sink_streams_size = 1;
-    }
-
     bool skip_destination_table = no_destination;
     auto insert_dependencies = InsertDependenciesBuilder::create(
         table, query_ptr, query_sample_block,
         async_insert, skip_destination_table, allow_materialized,
         getContext());
+
+    size_t sink_streams_size = table->supportsParallelInsert() ? max_insert_threads : 1;
+
+    if (is_trivial_insert_select)
+        sink_streams_size = std::min(num_select_threads, sink_streams_size);
+
+    if (!settings[Setting::parallel_view_processing] && insert_dependencies->isViewsInvolved())
+    {
+        sink_streams_size = 1;
+    }
 
     if (shouldAddSquashingForStorage(table, getContext()) && !no_squash && !async_insert)
     {
@@ -538,8 +532,7 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
     }
     pipeline.addChains(std::move(sink_chains));
 
-
-    pipeline.setMaxThreads(is_trivial_insert_select ? max_insert_threads : std::max<size_t>(num_select_threads, max_insert_threads));
+    pipeline.setMaxThreads(max_threads);
 
     pipeline.setSinks([&](const Block & cur_header, QueryPipelineBuilder::StreamType) -> ProcessorPtr
     {

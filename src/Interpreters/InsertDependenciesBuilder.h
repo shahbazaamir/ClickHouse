@@ -24,6 +24,9 @@ using StoragePtr = std::shared_ptr<IStorage>;
 struct StorageInMemoryMetadata;
 using StorageMetadataPtr = std::shared_ptr<const StorageInMemoryMetadata>;
 
+class ViewErrorsRegistry;
+using ViewErrorsRegistryPtr = std::shared_ptr<ViewErrorsRegistry>;
+
 class InsertDependenciesBuilder : public std::enable_shared_from_this<InsertDependenciesBuilder>
 {
 private:
@@ -39,6 +42,8 @@ private:
         bool operator<(const StorageIDPrivate & other) const;
         bool operator==(const StorageIDPrivate & other) const;
     };
+
+    friend class ViewErrorsRegistry;
 
     class DependencyPath
     {
@@ -87,6 +92,7 @@ public:
     }
 
     Chain createChainWithDependencies() const;
+    bool isViewsInvolved() const;
 
     void logQueryView(StorageID view_id, std::exception_ptr exception, bool before_start = false) const;
 
@@ -131,6 +137,8 @@ private:
     MapIdBlock output_headers;
     MapIdThreadGroup thread_groups;
 
+    ViewErrorsRegistryPtr views_error_registry;
+
     LoggerPtr logger;
 
 public:
@@ -140,6 +148,5 @@ public:
     bool materialized_views_ignore_errors = false;
     bool ignore_materialized_views_with_dropped_target_table = false;
 };
-
 
 }

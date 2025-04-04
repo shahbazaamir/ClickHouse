@@ -55,13 +55,13 @@
 #include <Common/ProfileEvents.h>
 #include <Common/SensitiveDataMasker.h>
 #include <Common/logger_useful.h>
-#include "base/defines.h"
 #include <Core/Block.h>
 #include <Core/LogsLevel.h>
 #include <Core/Settings.h>
 
+#include <atomic>
 #include <cassert>
-#include <functional>
+#include <exception>
 #include <memory>
 #include <vector>
 
@@ -136,6 +136,85 @@ namespace ErrorCodes
     extern const int TOO_DEEP_RECURSION;
     extern const int DEPENDENCIES_NOT_FOUND;
 }
+
+
+class ViewErrorsRegistry
+{
+    template <class T>
+    class SetOnce
+    {
+    private:
+        std::atomic_flag is_set;
+        T value;
+    public:
+        bool set(T value_)
+        {
+            if (is_set.test_and_set())
+                return false;
+
+            value = value_;
+            return true;
+        }
+        bool isSet() const
+        {
+            return is_set.test();
+        }
+        T get() const
+        {
+            if (is_set.test())
+                return value;
+            return T{};
+        }
+    };
+
+public:
+    class ViewErrors
+    {
+    public:
+        SetOnce<std::exception_ptr> external_exception;
+        SetOnce<std::exception_ptr> current_exception;
+        std::atomic_flag view_log_is_written;
+
+        bool needLogQueryView()
+        {
+            return !view_log_is_written.test_and_set();
+        }
+    };
+
+private:
+    using MapIdViewExceptions = std::map<InsertDependenciesBuilder::StorageIDPrivate, ViewErrors>;
+    MapIdViewExceptions view_errors;
+
+public:
+    SetOnce<std::exception_ptr> global_exception;
+
+    void init(const InsertDependenciesBuilder::StorageIDPrivate & view_id)
+    {
+        view_errors.try_emplace(view_id);
+    }
+
+    const ViewErrors & getErrors(const InsertDependenciesBuilder::StorageIDPrivate & view_id) const
+    {
+        return view_errors.at(view_id);
+    }
+
+    ViewErrors & getErrors(const InsertDependenciesBuilder::StorageIDPrivate & view_id)
+    {
+        return view_errors.at(view_id);
+    }
+
+    std::exception_ptr getFinalError(const InsertDependenciesBuilder::StorageIDPrivate & view_id, bool ignore_global) const
+    {
+        const auto & errors = getErrors(view_id);
+        if (auto e = errors.current_exception.get())
+            return e;
+        if (auto e = errors.external_exception.get())
+            return e;
+        if (!ignore_global)
+            return global_exception.get();
+        return nullptr;
+    }
+};
 
 
 static std::exception_ptr addStorageToException(std::exception_ptr ptr, const StorageID & storage)
@@ -236,6 +315,7 @@ public:
     }
 };
 
+
 class FinalizingViewsTransform final : public IProcessor
 {
     static InputPorts initPorts(std::vector<Block> headers)
@@ -247,10 +327,11 @@ class FinalizingViewsTransform final : public IProcessor
     }
 
 public:
-    explicit FinalizingViewsTransform(std::vector<Block> headers, std::vector<StorageID> views, InsertDependenciesBuilder::ConstPtr views_manager_)
+    FinalizingViewsTransform(std::vector<Block> headers, std::vector<StorageID> views, InsertDependenciesBuilder::ConstPtr insert_dependencies_, ViewErrorsRegistryPtr views_error_registry_)
         : IProcessor(initPorts(std::move(headers)), {Block()})
         , output(outputs.front())
-        , views_manager(views_manager_)
+        , insert_dependencies(insert_dependencies_)
+        , views_error_registry(views_error_registry_)
     {
         chassert(inputs.size() == views.size());
 
@@ -272,11 +353,11 @@ public:
 
         if (statuses.empty())
         {
-            if (first_internal_exception && !views_manager->materialized_views_ignore_errors)
+            if (first_current_exception && !insert_dependencies->materialized_views_ignore_errors)
             {
                 // if there was external exception, than it is already pushed
                 // we push only some our exception here if we have such
-                output.pushException(first_internal_exception);
+                output.pushException(first_current_exception);
             }
 
             output.finish();
@@ -308,30 +389,32 @@ public:
             if (!data.exception)
                 continue;
 
+            auto & view_errors = views_error_registry->getErrors(status.view_id);
+
             auto [is_external, original_exception] = unwrapExternalException(data.exception);
 
             if (is_external)
             {
-                if (!first_external_exception)
-                    first_external_exception = original_exception;
+                view_errors.external_exception.set(original_exception);
 
                 output.pushException(original_exception);
                 return Status::PortFull;
             }
 
-            if (!first_internal_exception)
-                first_internal_exception = addStorageToException(original_exception, status.view_id);
+            auto exception_with_storage = addStorageToException(original_exception, status.view_id);
 
-            if (status.exception)
+            if (!first_current_exception)
+                first_current_exception = exception_with_storage;
+
+            views_error_registry->global_exception.set(exception_with_storage);
+            if (!view_errors.current_exception.set(exception_with_storage))
                 continue;
 
-            status.exception = addStorageToException(original_exception, status.view_id);
-
-            if (!views_manager->materialized_views_ignore_errors)
+            if (!insert_dependencies->materialized_views_ignore_errors)
                 return Status::Ready;
 
             tryLogException(
-                status.exception,
+                exception_with_storage,
                 getLogger("FinalizingViewsTransform"),
                 "Cannot push to the storage. Error is ignored because the setting materialized_views_ignore_errors is enabled.",
                 LogsLevel::warning);
@@ -350,30 +433,30 @@ public:
     {
         for (auto & status : statuses)
         {
-            auto view_exception = status.exception;
-            auto view_or_upper_exception = view_exception ? view_exception : first_external_exception;
-            auto any_exception = view_or_upper_exception ? view_or_upper_exception : first_internal_exception;
+            auto & errors = views_error_registry->getErrors(status.view_id);
+
+            if (!errors.needLogQueryView())
+                continue;
 
             LOG_TRACE(
                 getLogger("FinalizingViewsTransform"),
-                "view {} finished {} has view_exception {}, has view_or_upper_exception {}, has any_exception {}",
-                status.view_id, status.is_finished, bool(view_exception), bool(view_or_upper_exception), bool(any_exception));
+                "view {} finished {} has view_exception {}, has final {}",
+                status.view_id, status.is_finished, bool(errors.current_exception.get()), bool(views_error_registry->getFinalError(status.view_id, insert_dependencies->materialized_views_ignore_errors)));
 
-
-            if (views_manager->materialized_views_ignore_errors)
+            if (insert_dependencies->materialized_views_ignore_errors)
             {
                 if (status.is_finished)
                 {
-                    views_manager->logQueryView(status.view_id, view_or_upper_exception);
+                    insert_dependencies->logQueryView(status.view_id, views_error_registry->getFinalError(status.view_id, /*ignore_global*/ true));
                 }
                 else
                 {
-                    views_manager->logQueryView(status.view_id, any_exception);
+                    insert_dependencies->logQueryView(status.view_id, views_error_registry->getFinalError(status.view_id, /*ignore_global*/ false));
                 }
             }
             else
             {
-                views_manager->logQueryView(status.view_id,any_exception);
+                insert_dependencies->logQueryView(status.view_id, views_error_registry->getFinalError(status.view_id, /*ignore_global*/ false));
             }
         }
 
@@ -386,9 +469,9 @@ private:
         explicit ViewStatus(StorageID view_id_)
             : view_id(std::move(view_id_))
         {}
+
         StorageID view_id;
         bool is_finished = false;
-        std::exception_ptr exception;
     };
 
     static std::pair<bool, std::exception_ptr> unwrapExternalException(std::exception_ptr & e)
@@ -409,10 +492,10 @@ private:
 
     OutputPort & output;
 
-    InsertDependenciesBuilder::ConstPtr views_manager;
+    InsertDependenciesBuilder::ConstPtr insert_dependencies;
+    ViewErrorsRegistryPtr views_error_registry;
     std::vector<ViewStatus> statuses;
-    std::exception_ptr first_internal_exception;
-    std::exception_ptr first_external_exception;
+    std::exception_ptr first_current_exception;
 };
 
 
@@ -579,6 +662,7 @@ InsertDependenciesBuilder::InsertDependenciesBuilder(StoragePtr table, ASTPtr qu
     , async_insert(async_insert_)
     , skip_destination_table(skip_destination_table_)
     , allow_materialized(allow_materialized_)
+    , views_error_registry(std::make_shared<ViewErrorsRegistry>())
     , logger(getLogger("InsertDependenciesBuilder"))
 {
     const auto & settings = init_context->getSettingsRef();
@@ -705,6 +789,7 @@ bool InsertDependenciesBuilder::collectPath(const DependencyPath & path)
         insert_contexts[root_view] = init_context;
         input_headers[root_view] = init_header;
         thread_groups[root_view] = CurrentThread::getGroup();
+        views_error_registry->init(root_view);
         dependent_views[root_view] = {};
     };
 
@@ -731,6 +816,7 @@ bool InsertDependenciesBuilder::collectPath(const DependencyPath & path)
         source_tables[current] = parent;
         thread_groups[current] = ThreadGroup::createForMaterializedView();
         view_types[current] = QueryViewsLogElement::ViewType::MATERIALIZED;
+        views_error_registry->init(current);
 
         select_queries[current] = metadata->getSelectQuery().inner_query;
         input_headers[current] = output_headers.at(path.prevParent());
@@ -759,6 +845,7 @@ bool InsertDependenciesBuilder::collectPath(const DependencyPath & path)
         input_headers[current] = output_headers.at(path.prevParent());
         thread_groups[current] = ThreadGroup::createForMaterializedView();
         view_types[current] = QueryViewsLogElement::ViewType::LIVE;
+        views_error_registry->init(current);
 
         auto parent_select_context = select_contexts.at(path.prevParent());
         auto view_context = metadata->getSQLSecurityOverriddenContext(parent_select_context);
@@ -790,6 +877,7 @@ bool InsertDependenciesBuilder::collectPath(const DependencyPath & path)
         input_headers[current] = output_headers.at(path.prevParent());
         thread_groups[current] = ThreadGroup::createForMaterializedView();
         view_types[current] = QueryViewsLogElement::ViewType::WINDOW;
+        views_error_registry->init(current);
 
         auto parent_select_context = select_contexts.at(path.prevParent());
         auto view_context = metadata->getSQLSecurityOverriddenContext(parent_select_context);
@@ -1133,7 +1221,7 @@ Chain InsertDependenciesBuilder::createPostSink(StorageIDPrivate view_id) const
     }
 
     auto copying_data = std::make_shared<CopyTransform>(output_headers.at(view_id), dependent_views_ids.size());
-    auto finalizing_views = std::make_shared<FinalizingViewsTransform>(std::move(output_view_chains_headers), dependent_views_ids, shared_from_this());
+    auto finalizing_views = std::make_shared<FinalizingViewsTransform>(std::move(output_view_chains_headers), dependent_views_ids, shared_from_this(), views_error_registry);
     auto out = copying_data->getOutputs().begin();
     auto in = finalizing_views->getInputs().begin();
 
@@ -1314,4 +1402,12 @@ bool InsertDependenciesBuilder::StorageIDPrivate::operator==(const StorageIDPriv
         return false;
     return StorageID::operator==(other);
 }
+
+
+bool InsertDependenciesBuilder::isViewsInvolved() const
+{
+    return inner_tables.contains(init_table_id) || !dependent_views.at(root_view).empty();
+}
+
+
 }

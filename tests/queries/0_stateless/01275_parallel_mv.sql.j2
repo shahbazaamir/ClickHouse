@@ -60,7 +60,8 @@ select
 from system.query_log where
     current_database = currentDatabase() and
     type != 'QueryStart' and
-    query like '%insert into testX %';
+    query like '%insert into testX %'
+order by ALL;
 
 -- { echoOff }
 

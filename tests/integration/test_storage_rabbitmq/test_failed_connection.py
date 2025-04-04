@@ -22,12 +22,6 @@ instance = cluster.add_instance(
     stay_alive=True,
 )
 
-instance2 = cluster.add_instance(
-    "instance2",
-    user_configs=["configs/users.xml"],
-    with_rabbitmq=True,
-)
-
 # Helpers
 
 
@@ -206,6 +200,7 @@ def test_rabbitmq_restore_failed_connection_without_losses_2(rabbitmq_cluster):
     while time.monotonic() < deadline:
         number = int(instance.query("SELECT count() FROM test.view"))
         if number != 0:
+            logging.debug(f"First result: {result} / {messages_num}")
             if number == messages_num:
                 pytest.fail("The RabbitMQ messages have been consumed before suspending the RabbitMQ server")
             break
