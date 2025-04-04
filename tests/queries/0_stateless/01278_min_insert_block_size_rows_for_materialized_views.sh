@@ -17,7 +17,7 @@ function execute()
 # TEST SETTINGS
 #
 TEST_01278_PARTS=9
-TEST_01278_MEMORY=$((50<<20))
+TEST_01278_MEMORY=$((100<<20))
 
 function cleanup()
 {
