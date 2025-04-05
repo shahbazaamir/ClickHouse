@@ -55,6 +55,7 @@
 #include <Common/ProfileEvents.h>
 #include <Common/SensitiveDataMasker.h>
 #include <Common/logger_useful.h>
+#include "base/defines.h"
 #include <Core/Block.h>
 #include <Core/LogsLevel.h>
 #include <Core/Settings.h>
@@ -170,14 +171,20 @@ class ViewErrorsRegistry
 public:
     class ViewErrors
     {
+        std::atomic_size_t finalizers_count = 0;
+
     public:
         SetOnce<std::exception_ptr> external_exception;
         SetOnce<std::exception_ptr> current_exception;
-        std::atomic_flag view_log_is_written;
+
+        void registerFinalizer()
+        {
+            finalizers_count.fetch_add(1);
+        }
 
         bool needLogQueryView()
         {
-            return !view_log_is_written.test_and_set();
+            return finalizers_count.fetch_sub(1) == 1;
         }
     };
 
@@ -338,6 +345,8 @@ public:
         statuses.reserve(views.size());
         for (auto & view_id : views)
         {
+            views_error_registry->getErrors(view_id).registerFinalizer();
+
             statuses.emplace_back(std::move(view_id));
         }
     }
@@ -429,7 +438,7 @@ public:
         return Status::NeedData;
     }
 
-    void work() override
+    void writeViewLogs()
     {
         for (auto & status : statuses)
         {
@@ -437,11 +446,6 @@ public:
 
             if (!errors.needLogQueryView())
                 continue;
-
-            LOG_TRACE(
-                getLogger("FinalizingViewsTransform"),
-                "view {} finished {} has view_exception {}, has final {}",
-                status.view_id, status.is_finished, bool(errors.current_exception.get()), bool(views_error_registry->getFinalError(status.view_id, insert_dependencies->materialized_views_ignore_errors)));
 
             if (insert_dependencies->materialized_views_ignore_errors)
             {
@@ -459,8 +463,29 @@ public:
                 insert_dependencies->logQueryView(status.view_id, views_error_registry->getFinalError(status.view_id, /*ignore_global*/ false));
             }
         }
+    }
 
+    void work() override
+    {
+        writeViewLogs();
         statuses.clear();
+    }
+
+    ~FinalizingViewsTransform() override
+    {
+        if (statuses.empty())
+            return;
+
+        chassert(isCancelled());
+
+        try
+        {
+            writeViewLogs();
+        }
+        catch (...)
+        {
+            tryLogCurrentException(__PRETTY_FUNCTION__);
+        }
     }
 
 private:
@@ -739,7 +764,7 @@ bool InsertDependenciesBuilder::collectPath(const DependencyPath & path)
 {
     const auto & parent = path.parent();
     const auto & current = path.current();
-    LOG_TRACE(logger, "collectPath: {}", path.debugString());
+    LOG_TEST(logger, "collectPath: {}", path.debugString());
 
     auto storage = current == init_table_id ? init_storage : DatabaseCatalog::instance().tryGetTable(current, init_context);
     auto lock = storage ? storage->tryLockForShare(init_context->getInitialQueryId(), init_context->getSettingsRef()[Setting::lock_acquire_timeout]) : nullptr;
@@ -1276,7 +1301,6 @@ void InsertDependenciesBuilder::logQueryView(StorageID view_id, std::exception_p
     if (!thread_group)
         return;
 
-    LOG_TRACE(logger, "view {} status {} exception <{}>", view_id, event_status, exception ? getExceptionMessage(exception, false) : "-");
     const auto & view_type = view_types.at(view_id);
     const auto & inner_table_id = inner_tables.at(view_id);
 
