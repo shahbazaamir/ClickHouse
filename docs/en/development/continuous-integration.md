@@ -60,11 +60,11 @@ Performs various style checks on the code base.
 Basic checks in the Style Check job:
 
 ##### cpp
-Performs simple regex-based code style checks using the [`ci/jobs/scripts/check_style/check_cpp.sh`](https://github.com/ClickHouse/ClickHouse/blob/master/ci/jobs/scripts/check_style/check_cpp.sh) script (which can also be run locally).  
+Performs simple regex-based code style checks using the [`ci/jobs/scripts/check_style/check_cpp.sh`](https://github.com/ClickHouse/ClickHouse/blob/master/ci/jobs/scripts/check_style/check_cpp.sh) script (which can also be run locally).
 If it fails, fix the style issues according to the [code style guide](style.md).
 
 ##### codespell, aspell
-Check for grammatical mistakes and typos.
+Checks for grammatical mistakes and typos.
 
 ##### mypy
 Performs static type checking for Python code.
