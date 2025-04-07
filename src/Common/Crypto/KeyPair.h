@@ -31,15 +31,20 @@ public:
     explicit KeyPair(EVP_PKEY *key_) : key(key_) {}
     explicit operator EVP_PKEY *() const { return key; }
 
-    KeyPair & operator=(const KeyPair &other)
-    {
-        if (this == &other)
-            return *this;
+    KeyPair(const KeyPair&) = delete;
+    KeyPair& operator=(const KeyPair&) = delete;
 
-        key = EVP_PKEY_dup(other.key);
-        if (!key)
-            throw Exception(ErrorCodes::OPENSSL_ERROR, "EVP_PKEY_dup failed: {}", getOpenSSLErrors());
+    KeyPair(KeyPair&& other) noexcept : key(other.key) {
+        other.key = nullptr;
+    }
 
+    KeyPair& operator=(KeyPair&& other) noexcept {
+        if (this != &other) {
+            if (key)
+                EVP_PKEY_free(key);
+            key = other.key;
+            other.key = nullptr;
+        }
         return *this;
     }
 
@@ -118,7 +123,11 @@ public:
             throw Exception(ErrorCodes::OPENSSL_ERROR, "EVP_PKEY_CTX_set_params failed: {}", getOpenSSLErrors());
 
         if (EVP_PKEY_keygen(ctx.get(), &key) <= 0)
+        {
+            if (key)
+                EVP_PKEY_free(key);
             throw Exception(ErrorCodes::OPENSSL_ERROR, "EVP_PKEY_keygen failed: {}", getOpenSSLErrors());
+        }
 
         return KeyPair(key);
     }
