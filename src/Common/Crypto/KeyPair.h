@@ -41,7 +41,8 @@ public:
 
     KeyPair& operator=(KeyPair&& other) noexcept
     {
-        if (this != &other) {
+        if (this != &other)
+        {
             if (key)
                 EVP_PKEY_free(key);
             key = other.key;
