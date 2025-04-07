@@ -31,17 +31,17 @@ public:
     explicit KeyPair(EVP_PKEY *key_) : key(key_) {}
     explicit operator EVP_PKEY *() const { return key; }
 
-    // KeyPair & operator=(const KeyPair &other)
-    // {
-    //     if (this == &other)
-    //         return *this;
-    //
-    //     key = EVP_PKEY_dup(other.key);
-    //     if (!key)
-    //         throw Exception(ErrorCodes::OPENSSL_ERROR, "EVP_PKEY_dup failed: {}", getOpenSSLErrors());
-    //
-    //     return *this;
-    // }
+    KeyPair & operator=(const KeyPair &other)
+    {
+        if (this == &other)
+            return *this;
+
+        key = EVP_PKEY_dup(other.key);
+        if (!key)
+            throw Exception(ErrorCodes::OPENSSL_ERROR, "EVP_PKEY_dup failed: {}", getOpenSSLErrors());
+
+        return *this;
+    }
 
     static KeyPair fromFile(const std::string & path, const std::string & password = "")
     {
@@ -85,7 +85,7 @@ public:
 
     static KeyPair generateRSA(uint32_t bits = 2048, uint32_t exponent = RSA_F4)
     {
-        EVP_PKEY *key = EVP_PKEY_new();
+        EVP_PKEY *key = nullptr;
 
         using EVP_PKEY_CTX_ptr = std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)>;
         EVP_PKEY_CTX_ptr ctx(EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr), EVP_PKEY_CTX_free);
