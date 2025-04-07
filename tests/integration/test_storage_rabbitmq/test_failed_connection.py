@@ -116,6 +116,7 @@ def test_rabbitmq_restore_failed_connection_without_losses_1(rabbitmq_cluster):
     while time.monotonic() < deadline:
         number = int(instance.query("SELECT count() FROM test.view"))
         if number != 0:
+            logging.debug(f"First result: {number} / {messages_num}")
             if number == messages_num:
                 pytest.fail("The RabbitMQ messages have been consumed before suspending the RabbitMQ server")
             break
@@ -200,7 +201,7 @@ def test_rabbitmq_restore_failed_connection_without_losses_2(rabbitmq_cluster):
     while time.monotonic() < deadline:
         number = int(instance.query("SELECT count() FROM test.view"))
         if number != 0:
-            logging.debug(f"First result: {result} / {messages_num}")
+            logging.debug(f"First result: {number} / {messages_num}")
             if number == messages_num:
                 pytest.fail("The RabbitMQ messages have been consumed before suspending the RabbitMQ server")
             break
