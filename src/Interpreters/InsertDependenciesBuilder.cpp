@@ -360,19 +360,6 @@ public:
         if (!output.canPush())
             return Status::PortFull;
 
-        if (statuses.empty())
-        {
-            if (first_current_exception && !insert_dependencies->materialized_views_ignore_errors)
-            {
-                // if there was external exception, than it is already pushed
-                // we push only some our exception here if we have such
-                output.pushException(first_current_exception);
-            }
-
-            output.finish();
-            return Status::Finished;
-        }
-
         size_t num_finished = 0;
         size_t i = 0;
         for (auto & input : inputs)
@@ -412,15 +399,15 @@ public:
 
             auto exception_with_storage = addStorageToException(original_exception, status.view_id);
 
-            if (!first_current_exception)
-                first_current_exception = exception_with_storage;
-
             views_error_registry->global_exception.set(exception_with_storage);
             if (!view_errors.current_exception.set(exception_with_storage))
                 continue;
 
             if (!insert_dependencies->materialized_views_ignore_errors)
-                return Status::Ready;
+            {
+                output.pushException(exception_with_storage);
+                return Status::PortFull;
+            }
 
             tryLogException(
                 exception_with_storage,
@@ -433,7 +420,10 @@ public:
         }
 
         if (num_finished == inputs.size())
-            return Status::Ready;
+        {
+            output.finish();
+            return Status::Finished;
+        }
 
         return Status::NeedData;
     }
@@ -463,21 +453,13 @@ public:
                 insert_dependencies->logQueryView(status.view_id, views_error_registry->getFinalError(status.view_id, /*ignore_global*/ false));
             }
         }
-    }
-
-    void work() override
-    {
-        writeViewLogs();
         statuses.clear();
     }
 
+    void work() override { /* no op */ }
+
     ~FinalizingViewsTransform() override
     {
-        if (statuses.empty())
-            return;
-
-        chassert(isCancelled());
-
         try
         {
             writeViewLogs();
@@ -520,7 +502,6 @@ private:
     InsertDependenciesBuilder::ConstPtr insert_dependencies;
     ViewErrorsRegistryPtr views_error_registry;
     std::vector<ViewStatus> statuses;
-    std::exception_ptr first_current_exception;
 };
 
 
