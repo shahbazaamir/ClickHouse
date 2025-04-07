@@ -34,11 +34,13 @@ public:
     KeyPair(const KeyPair&) = delete;
     KeyPair& operator=(const KeyPair&) = delete;
 
-    KeyPair(KeyPair&& other) noexcept : key(other.key) {
+    KeyPair(KeyPair&& other) noexcept : key(other.key)
+    {
         other.key = nullptr;
     }
 
-    KeyPair& operator=(KeyPair&& other) noexcept {
+    KeyPair& operator=(KeyPair&& other) noexcept
+    {
         if (this != &other) {
             if (key)
                 EVP_PKEY_free(key);
