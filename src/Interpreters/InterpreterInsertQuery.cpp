@@ -449,10 +449,6 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
         return std::make_shared<MaterializingTransform>(in_header, !table->supportsSparseSerialization());
     });
 
-    size_t num_select_threads = pipeline.getNumThreads();
-
-    pipeline.resize(1);
-
     pipeline.addSimpleTransform([&](const Block & in_header) -> ProcessorPtr
     {
         auto context_ptr = getContext();
@@ -462,6 +458,10 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
 
         return counting;
     });
+
+    size_t num_select_threads = pipeline.getNumThreads();
+
+    pipeline.resize(1);
 
     if (shouldAddSquashingForStorage(table, getContext()) && !no_squash && !async_insert)
     {
@@ -509,6 +509,14 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
         sink_streams_size = 1;
     }
 
+    std::vector<Chain> sink_chains;
+    for (size_t i = 0; i < sink_streams_size; ++i)
+    {
+        sink_chains.push_back(insert_dependencies->createChainWithDependencies());
+    }
+
+    pipeline.resize(sink_streams_size);
+
     if (shouldAddSquashingForStorage(table, getContext()) && !no_squash && !async_insert)
     {
         pipeline.addSimpleTransform(
@@ -517,14 +525,6 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
                 return std::make_shared<ApplySquashingTransform>(in_header);
             });
     }
-
-    std::vector<Chain> sink_chains;
-    for (size_t i = 0; i < sink_streams_size; ++i)
-    {
-        sink_chains.push_back(insert_dependencies->createChainWithDependencies());
-    }
-
-    pipeline.resize(sink_streams_size);
 
     for (auto & chain : sink_chains)
     {
