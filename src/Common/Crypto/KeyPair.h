@@ -41,13 +41,15 @@ public:
 
     KeyPair& operator=(KeyPair&& other) noexcept
     {
-        if (this != &other)
-        {
-            if (key)
-                EVP_PKEY_free(key);
-            key = other.key;
-            other.key = nullptr;
-        }
+        if (this == &other)
+            return *this;
+
+        if (key)
+            EVP_PKEY_free(key);
+
+        key = other.key;
+        other.key = nullptr;
+
         return *this;
     }
 
