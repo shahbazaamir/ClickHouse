@@ -228,7 +228,7 @@ __attribute__((constructor(0))) void init_je_malloc_message()
 #    endif
     };
 
-    UseSSL();
+    DB::UseSSL();
 }
 #endif
 
